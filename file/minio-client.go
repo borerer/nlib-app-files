@@ -54,8 +54,10 @@ func (mc *MinioClient) GetFile(filename string) (io.ReadCloser, error) {
 	return obj, nil
 }
 
-func (mc *MinioClient) PutFile(filename string, override bool, fileReader io.Reader) (int64, error) {
-	info, err := mc.client.PutObject(context.Background(), mc.config.Bucket, filename, fileReader, -1, minio.PutObjectOptions{})
+func (mc *MinioClient) PutFile(filename string, contentType string, override bool, fileReader io.Reader) (int64, error) {
+	info, err := mc.client.PutObject(context.Background(), mc.config.Bucket, filename, fileReader, -1, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
 	if err != nil {
 		return 0, err
 	}

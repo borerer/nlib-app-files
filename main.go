@@ -3,71 +3,62 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"os"
 
 	"github.com/borerer/nlib-app-files/file"
-	nlibgo "github.com/borerer/nlib-go"
+	nlib "github.com/borerer/nlib-go"
+	"github.com/borerer/nlib-go/har"
 )
 
 var (
-	minioClient *file.MinioClient
+	minioClient    *file.MinioClient
+	EncodingBase64 = "base64"
 )
 
-func mustString(in map[string]interface{}, key string) (string, error) {
-	raw, ok := in[key]
-	if !ok {
-		return "", fmt.Errorf("missing %s", key)
-	}
-	str, ok := raw.(string)
-	if !ok {
-		return "", fmt.Errorf("invalid type %s", key)
-	}
-	return str, nil
+func toBase64(buf []byte) string {
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
-func get(in map[string]interface{}) interface{} {
-	filename, err := mustString(in, "filename")
+func fromBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
+func get(req *nlib.FunctionIn) (*nlib.FunctionOut, error) {
+	filename := har.GetQuery(req, "file")
+	stat, err := minioClient.HeadFile(filename)
 	if err != nil {
-		return err.Error()
+		return nil, err
 	}
 	reader, err := minioClient.GetFile(filename)
 	if err != nil {
-		return err.Error()
+		return nil, err
 	}
 	defer reader.Close()
 	buf, err := io.ReadAll(reader)
 	if err != nil {
-		return err.Error()
+		return nil, err
 	}
-	return buf
+	b64Str := toBase64(buf)
+	res := har.Text(b64Str)
+	res.Headers = append(res.Headers, har.Header{Name: "Content-Type", Value: stat.ContentType})
+	res.Content.Encoding = &EncodingBase64
+	return res, nil
 }
 
-func put(in map[string]interface{}) interface{} {
-	filename, err := mustString(in, "filename")
+func put(req *nlib.FunctionIn) (*nlib.FunctionOut, error) {
+	filename := har.GetQuery(req, "file")
+	contentType := har.GetHeader(req, "Content-Type")
+	buf, err := fromBase64(*req.PostData.Text)
 	if err != nil {
-		return err.Error()
-	}
-	content, err := mustString(in, "content")
-	if err != nil {
-		return err.Error()
-	}
-	buf, err := base64.StdEncoding.DecodeString(content)
-	if err != nil {
-		return err.Error()
+		return nil, err
 	}
 	reader := bytes.NewReader(buf)
-	_, err = minioClient.PutFile(filename, true, reader)
+	_, err = minioClient.PutFile(filename, contentType, true, reader)
 	if err != nil {
-		return err.Error()
+		return nil, err
 	}
-	return "ok"
-}
-
-func wait() {
-	ch := make(chan bool)
-	<-ch
+	return har.Text("ok"), nil
 }
 
 func main() {
@@ -78,12 +69,13 @@ func main() {
 		UseSSL:    os.Getenv("NLIB_MINIO_USE_SSL") == "true",
 		Bucket:    os.Getenv("NLIB_MINIO_BUCKET"),
 	})
-	if err := minioClient.Start(); err != nil {
-		println(err.Error())
-		return
-	}
-	nlib := nlibgo.NewClient(os.Getenv("NLIB_SERVER"), "files")
+	nlib.Must(minioClient.Start())
+
+	nlib.SetEndpoint(os.Getenv("NLIB_SERVER"))
+	nlib.SetAppID("files")
+	nlib.Must(nlib.Connect())
+
 	nlib.RegisterFunction("get", get)
 	nlib.RegisterFunction("put", put)
-	wait()
+	nlib.Wait()
 }
